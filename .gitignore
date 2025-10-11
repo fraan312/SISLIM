@@ -1,0 +1,20 @@
+# Archivos compilados de Java
+*.class
+
+# Archivos del TP2 (no necesarios para TP3)
+base_de_datos_sislim/
+Modulo/
+Segovia-Francisco-AP2.pdf
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.idea/
+.vscode/
+*.iml
+
+# Archivos temporales
+*.tmp
+*.log
