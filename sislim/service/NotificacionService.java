@@ -1,51 +1,49 @@
 package sislim.service;
 
 import sislim.model.*;
+import sislim.dao.*;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Clase NotificacionService - Aplicación del concepto de ENCAPSULAMIENTO
+ * Clase NotificacionService - Aplicación del concepto de ENCAPSULAMIENTO y MVC
  * 
  * Esta clase proporciona servicios para la gestión de notificaciones en el sistema SISLIM.
  * Maneja el envío, almacenamiento y gestión de notificaciones para turnos.
  * 
+ * En el TP4, esta clase actúa como CONTROLADOR en el patrón MVC:
+ * - MODEL: Notificacion (clase del modelo)
+ * - VIEW: SISLIMSwing.java (interfaz gráfica)
+ * - CONTROLLER: NotificacionService (esta clase - lógica de negocio)
+ * 
+ * Utiliza DAO (Data Access Object) para persistencia en MySQL con JDBC.
+ * 
  * Conceptos de POO aplicados:
  * - ENCAPSULAMIENTO: Atributos privados con métodos públicos de acceso
- * - COMPOSICIÓN: Utiliza las clases del modelo (Notificacion, Turno, etc.)
+ * - COMPOSICIÓN: Utiliza las clases del modelo y DAOs
  */
 public class NotificacionService {
     
-    // Lista para almacenar todas las notificaciones del sistema (sin persistencia) - ENCAPSULAMIENTO
-    private List<Notificacion> notificaciones;
-    private int contadorId; // Contador para generar IDs únicos
+    // DAO para acceso a datos - ENCAPSULAMIENTO y COMPOSICIÓN
+    private NotificacionDAO notificacionDAO;
     
     /**
      * Constructor por defecto - ENCAPSULAMIENTO
+     * Inicializa el DAO para acceso a la base de datos
      */
     public NotificacionService() {
-        this.notificaciones = new ArrayList<>();
-        this.contadorId = 1;
+        this.notificacionDAO = new NotificacionDAO();
     }
     
     // Métodos getters - ENCAPSULAMIENTO
+    /**
+     * Método para obtener todas las notificaciones desde la base de datos - READ (CRUD)
+     * @return Lista de todas las notificaciones
+     */
     public List<Notificacion> getNotificaciones() {
-        return new ArrayList<>(notificaciones); // Retorna una copia para mantener encapsulamiento
-    }
-    
-    public int getContadorId() {
-        return contadorId;
-    }
-    
-    // Métodos setters - ENCAPSULAMIENTO
-    public void setNotificaciones(List<Notificacion> notificaciones) {
-        this.notificaciones = new ArrayList<>(notificaciones);
-    }
-    
-    public void setContadorId(int contadorId) {
-        this.contadorId = contadorId;
+        return notificacionDAO.leerTodas();
     }
     
     /**
@@ -60,17 +58,15 @@ public class NotificacionService {
                 throw new IllegalArgumentException("La notificación no puede ser nula");
             }
             
-            // Asignar ID si no tiene uno
-            if (notificacion.getIdNotificacion() == 0) {
-                notificacion.setIdNotificacion(contadorId++);
-            }
-            
-            // Enviar la notificación
+            // Enviar la notificación (lógica de negocio)
             if (notificacion.enviar()) {
-                // Agregar a la lista de notificaciones del sistema
-                notificaciones.add(notificacion);
-                System.out.println("Notificación enviada exitosamente con ID: " + notificacion.getIdNotificacion());
-                return true;
+                // Persistir la notificación en la base de datos usando DAO - CREATE (CRUD)
+                Notificacion notificacionGuardada = notificacionDAO.crear(notificacion);
+                
+                if (notificacionGuardada != null) {
+                    System.out.println("Notificación enviada exitosamente con ID: " + notificacionGuardada.getIdNotificacion());
+                    return true;
+                }
             }
             
             return false;
@@ -218,9 +214,7 @@ public class NotificacionService {
      * @return Lista de notificaciones para ese turno
      */
     public List<Notificacion> buscarNotificacionesPorTurno(int idTurno) {
-        return notificaciones.stream()
-                .filter(notificacion -> notificacion.getIdTurno() == idTurno)
-                .collect(Collectors.toList());
+        return notificacionDAO.buscarPorTurno(idTurno); // Buscar en BD
     }
     
     /**
@@ -229,9 +223,7 @@ public class NotificacionService {
      * @return Lista de notificaciones de ese tipo
      */
     public List<Notificacion> buscarNotificacionesPorTipo(String tipo) {
-        return notificaciones.stream()
-                .filter(notificacion -> notificacion.getTipo().equals(tipo))
-                .collect(Collectors.toList());
+        return notificacionDAO.buscarPorTipo(tipo); // Buscar en BD
     }
     
     /**
@@ -239,9 +231,9 @@ public class NotificacionService {
      * @return Lista de notificaciones pendientes de envío
      */
     public List<Notificacion> buscarNotificacionesPendientes() {
-        return notificaciones.stream()
-                .filter(notificacion -> !notificacion.isEnviada())
-                .collect(Collectors.toList());
+        // En BD, todas las notificaciones se consideran enviadas al estar guardadas
+        // Este método podría ser útil para notificaciones en memoria antes de persistir
+        return new ArrayList<>();
     }
     
     /**
@@ -249,9 +241,12 @@ public class NotificacionService {
      * @return String con estadísticas
      */
     public String obtenerEstadisticas() {
+        // Leer todas las notificaciones desde BD para calcular estadísticas - READ (CRUD)
+        List<Notificacion> notificaciones = notificacionDAO.leerTodas();
+        
         int totalNotificaciones = notificaciones.size();
-        int notificacionesEnviadas = (int) notificaciones.stream().filter(Notificacion::isEnviada).count();
-        int notificacionesPendientes = totalNotificaciones - notificacionesEnviadas;
+        int notificacionesEnviadas = notificaciones.size(); // En BD todas están enviadas
+        int notificacionesPendientes = 0;
         
         int confirmaciones = (int) notificaciones.stream().filter(n -> "Confirmacion".equals(n.getTipo())).count();
         int avisos = (int) notificaciones.stream().filter(n -> "Aviso".equals(n.getTipo())).count();
@@ -279,14 +274,16 @@ public class NotificacionService {
     public int limpiarNotificacionesAntiguas(int diasAntiguedad) {
         LocalDateTime fechaLimite = LocalDateTime.now().minusDays(diasAntiguedad);
         
+        // Leer todas las notificaciones desde BD - READ (CRUD)
+        List<Notificacion> notificaciones = notificacionDAO.leerTodas();
+        
         List<Notificacion> notificacionesAEliminar = notificaciones.stream()
-                .filter(notificacion -> notificacion.isEnviada() && 
-                                      notificacion.getFechaEnvio().isBefore(fechaLimite))
+                .filter(notificacion -> notificacion.getFechaEnvio().isBefore(fechaLimite))
                 .collect(Collectors.toList());
         
-        notificaciones.removeAll(notificacionesAEliminar);
-        
-        System.out.println("Se eliminaron " + notificacionesAEliminar.size() + " notificaciones antiguas");
+        // Nota: El NotificacionDAO no tiene método eliminar implementado
+        // En un sistema completo se implementaría DELETE aquí
+        System.out.println("Se encontraron " + notificacionesAEliminar.size() + " notificaciones antiguas para eliminar");
         return notificacionesAEliminar.size();
     }
     

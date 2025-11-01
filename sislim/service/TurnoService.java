@@ -1,6 +1,7 @@
 package sislim.service;
 
 import sislim.model.*;
+import sislim.dao.*;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -8,46 +9,47 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Clase TurnoService - Aplicación del concepto de ENCAPSULAMIENTO
+ * Clase TurnoService - Aplicación del concepto de ENCAPSULAMIENTO y MVC
  * 
  * Esta clase proporciona servicios para la gestión de turnos en el sistema SISLIM.
  * Maneja la lógica de negocio relacionada con turnos, incluyendo reservas,
  * confirmaciones, cancelaciones y búsquedas.
  * 
+ * En el TP4, esta clase actúa como CONTROLADOR en el patrón MVC:
+ * - MODEL: Turno, Cliente, Administrador (clases del modelo)
+ * - VIEW: SISLIMSwing.java (interfaz gráfica)
+ * - CONTROLLER: TurnoService (esta clase - lógica de negocio)
+ * 
+ * Utiliza DAO (Data Access Object) para persistencia en MySQL con JDBC.
+ * 
  * Conceptos de POO aplicados:
  * - ENCAPSULAMIENTO: Atributos privados con métodos públicos de acceso
- * - COMPOSICIÓN: Utiliza las clases del modelo (Turno, Cliente, Administrador, etc.)
+ * - COMPOSICIÓN: Utiliza las clases del modelo y DAOs
  */
 public class TurnoService {
     
-    // Lista para almacenar todos los turnos del sistema (sin persistencia) - ENCAPSULAMIENTO
-    private List<Turno> turnos;
-    private int contadorId; // Contador para generar IDs únicos
+    // DAO para acceso a datos - ENCAPSULAMIENTO y COMPOSICIÓN
+    private TurnoDAO turnoDAO;
+    private NotificacionDAO notificacionDAO;
+    private DisponibilidadDAO disponibilidadDAO;
     
     /**
      * Constructor por defecto - ENCAPSULAMIENTO
+     * Inicializa los DAOs para acceso a la base de datos
      */
     public TurnoService() {
-        this.turnos = new ArrayList<>();
-        this.contadorId = 1;
+        this.turnoDAO = new TurnoDAO();
+        this.notificacionDAO = new NotificacionDAO();
+        this.disponibilidadDAO = new DisponibilidadDAO();
     }
     
     // Métodos getters - ENCAPSULAMIENTO
+    /**
+     * Método para obtener todos los turnos desde la base de datos - READ (CRUD)
+     * @return Lista de todos los turnos
+     */
     public List<Turno> getTurnos() {
-        return new ArrayList<>(turnos); // Retorna una copia para mantener encapsulamiento
-    }
-    
-    public int getContadorId() {
-        return contadorId;
-    }
-    
-    // Métodos setters - ENCAPSULAMIENTO
-    public void setTurnos(List<Turno> turnos) {
-        this.turnos = new ArrayList<>(turnos);
-    }
-    
-    public void setContadorId(int contadorId) {
-        this.contadorId = contadorId;
+        return turnoDAO.leerTodos();
     }
     
     /**
@@ -80,45 +82,70 @@ public class TurnoService {
                 throw new IllegalArgumentException("El tipo de servicio no puede estar vacío");
             }
             
-            // Verificar que no haya conflicto de horarios (cualquier cliente)
-            for (Turno turnoExistente : turnos) {
-                if (turnoExistente.getFecha().equals(fecha) &&
-                    turnoExistente.getHora().equals(hora) &&
-                    !"Cancelado".equals(turnoExistente.getEstado())) {
-                    throw new IllegalStateException("Ya existe un turno reservado para esa fecha y hora. Por favor, seleccione otro horario.");
+            // Verificar que no haya conflicto de horarios usando DAO - FUNCIONALIDAD DEL SISTEMA
+            if (turnoDAO.existeConflictoHorario(fecha, hora, 0)) {
+                throw new IllegalStateException("Ya existe un turno reservado para esa fecha y hora. Por favor, seleccione otro horario.");
+            }
+            
+            // Buscar una disponibilidad desde la BD que coincida con la fecha - READ (CRUD)
+            List<Disponibilidad> disponibilidades = disponibilidadDAO.leerTodas();
+            int idDisponibilidad = 0;
+            
+            // Buscar una disponibilidad que coincida con la fecha
+            for (Disponibilidad disp : disponibilidades) {
+                if (disp.getFecha().equals(fecha) && disp.isDisponible()) {
+                    idDisponibilidad = disp.getIdDisponibilidad();
+                    break;
                 }
+            }
+            
+            // Si no se encuentra disponibilidad, usar la primera disponible
+            if (idDisponibilidad == 0 && !disponibilidades.isEmpty()) {
+                for (Disponibilidad disp : disponibilidades) {
+                    if (disp.isDisponible()) {
+                        idDisponibilidad = disp.getIdDisponibilidad();
+                        break;
+                    }
+                }
+            }
+            
+            // Si aún no hay disponibilidad, lanzar excepción
+            if (idDisponibilidad == 0) {
+                throw new IllegalStateException("No hay disponibilidades en la base de datos. Por favor, agregue disponibilidades primero.");
             }
             
             // Crear el nuevo turno
             Turno nuevoTurno = new Turno();
-            nuevoTurno.setIdTurno(contadorId++);
             nuevoTurno.setFecha(fecha);
             nuevoTurno.setHora(hora);
             nuevoTurno.setDuracion(duracion);
             nuevoTurno.setTipoServicio(tipoServicio);
-            nuevoTurno.setObservaciones(observaciones);
+            nuevoTurno.setObservaciones(observaciones != null ? observaciones : "");
             nuevoTurno.setIdCliente(cliente.getId());
             nuevoTurno.setEstado("Pendiente");
+            nuevoTurno.setIdDisponibilidad(idDisponibilidad); // Asignar disponibilidad desde BD - READ (CRUD)
             
-            // Crear notificación de confirmación
-            Notificacion notificacion = Notificacion.crearConfirmacion(
-                nuevoTurno.getIdTurno(), 
-                "Su turno ha sido reservado exitosamente para el " + fecha + " a las " + hora
-            );
-            nuevoTurno.getNotificaciones().add(notificacion);
-            
-            // Agregar el turno a la lista
-            turnos.add(nuevoTurno);
-            
-            // Usar el método del cliente para solicitar el turno
+            // Usar el método del cliente para solicitar el turno (validación)
             if (cliente.solicitarTurno(nuevoTurno)) {
-                System.out.println("Turno reservado exitosamente con ID: " + nuevoTurno.getIdTurno());
-                return nuevoTurno;
-            } else {
-                // Si falla, remover el turno de la lista
-                turnos.remove(nuevoTurno);
-                return null;
+                // Persistir el turno en la base de datos usando DAO - CREATE (CRUD)
+                Turno turnoGuardado = turnoDAO.crear(nuevoTurno);
+                
+                if (turnoGuardado != null) {
+                    // Crear notificación de confirmación y guardarla en BD
+                    Notificacion notificacion = Notificacion.crearConfirmacion(
+                        turnoGuardado.getIdTurno(), 
+                        "Su turno ha sido reservado exitosamente para el " + fecha + " a las " + hora
+                    );
+                    notificacionDAO.crear(notificacion);
+                    
+                    System.out.println("Turno reservado exitosamente con ID: " + turnoGuardado.getIdTurno());
+                    return turnoGuardado;
+                } else {
+                    throw new IllegalStateException("Error al guardar el turno en la base de datos");
+                }
             }
+            
+            return null;
             
         } catch (IllegalArgumentException | IllegalStateException e) {
             System.out.println("Error al reservar turno: " + e.getMessage());
@@ -134,23 +161,26 @@ public class TurnoService {
      */
     public boolean confirmarTurno(Administrador administrador, int idTurno) {
         try {
-            // Buscar el turno
-            Turno turno = buscarTurnoPorId(idTurno);
+            // Buscar el turno desde la base de datos - READ (CRUD)
+            Turno turno = turnoDAO.leerPorId(idTurno);
             if (turno == null) {
                 throw new IllegalStateException("No se encontró el turno con ID: " + idTurno);
             }
             
-            // Usar el método del administrador para confirmar el turno
+            // Usar el método del administrador para confirmar el turno (validación)
             if (administrador.confirmarTurno(turno)) {
-                // Crear notificación de confirmación
-                Notificacion notificacion = Notificacion.crearConfirmacion(
-                    turno.getIdTurno(),
-                    "Su turno ha sido confirmado por el administrador"
-                );
-                turno.getNotificaciones().add(notificacion);
-                
-                System.out.println("Turno confirmado exitosamente por administrador: " + administrador.getNombre());
-                return true;
+                // Actualizar el turno en la base de datos - UPDATE (CRUD)
+                if (turnoDAO.actualizar(turno)) {
+                    // Crear notificación de confirmación y guardarla en BD
+                    Notificacion notificacion = Notificacion.crearConfirmacion(
+                        turno.getIdTurno(),
+                        "Su turno ha sido confirmado por el administrador"
+                    );
+                    notificacionDAO.crear(notificacion);
+                    
+                    System.out.println("Turno confirmado exitosamente por administrador: " + administrador.getNombre());
+                    return true;
+                }
             }
             
             return false;
@@ -169,8 +199,8 @@ public class TurnoService {
      */
     public boolean cancelarTurno(Cliente cliente, int idTurno) {
         try {
-            // Buscar el turno
-            Turno turno = buscarTurnoPorId(idTurno);
+            // Buscar el turno desde la base de datos - READ (CRUD)
+            Turno turno = turnoDAO.leerPorId(idTurno);
             if (turno == null) {
                 throw new IllegalStateException("No se encontró el turno con ID: " + idTurno);
             }
@@ -180,14 +210,22 @@ public class TurnoService {
                 throw new IllegalStateException("El turno no pertenece a este cliente");
             }
             
-            // Usar el método del cliente para cancelar el turno
-            if (cliente.cancelarTurno(idTurno)) {
-                // Crear notificación de cancelación
+            // Validación: verificar que el turno no esté ya cancelado
+            if ("Cancelado".equals(turno.getEstado())) {
+                throw new IllegalStateException("El turno ya está cancelado");
+            }
+            
+            // Cambiar el estado del turno a cancelado (actualizar directamente el objeto de BD)
+            turno.setEstado("Cancelado");
+            
+            // Actualizar el turno en la base de datos - UPDATE (CRUD)
+            if (turnoDAO.actualizar(turno)) {
+                // Crear notificación de cancelación y guardarla en BD
                 Notificacion notificacion = Notificacion.crearAviso(
                     turno.getIdTurno(),
                     "Su turno ha sido cancelado exitosamente"
                 );
-                turno.getNotificaciones().add(notificacion);
+                notificacionDAO.crear(notificacion);
                 
                 System.out.println("Turno cancelado exitosamente por cliente: " + cliente.getNombre());
                 return true;
@@ -207,6 +245,8 @@ public class TurnoService {
      */
     public List<Turno> listarTurnos() {
         System.out.println("=== LISTADO DE TURNOS ===");
+        List<Turno> turnos = turnoDAO.leerTodos(); // Leer desde BD - READ (CRUD)
+        
         if (turnos.isEmpty()) {
             System.out.println("No hay turnos registrados en el sistema");
             return new ArrayList<>();
@@ -217,7 +257,7 @@ public class TurnoService {
         }
         
         System.out.println("Total de turnos: " + turnos.size());
-        return new ArrayList<>(turnos);
+        return turnos;
     }
     
     /**
@@ -226,12 +266,7 @@ public class TurnoService {
      * @return El turno encontrado o null si no existe
      */
     public Turno buscarTurnoPorId(int idTurno) {
-        for (Turno turno : turnos) {
-            if (turno.getIdTurno() == idTurno) {
-                return turno;
-            }
-        }
-        return null;
+        return turnoDAO.leerPorId(idTurno); // Leer desde BD - READ (CRUD)
     }
     
     /**
@@ -240,9 +275,7 @@ public class TurnoService {
      * @return Lista de turnos del cliente
      */
     public List<Turno> buscarTurnosPorCliente(int idCliente) {
-        return turnos.stream()
-                .filter(turno -> turno.getIdCliente() == idCliente)
-                .collect(Collectors.toList());
+        return turnoDAO.buscarPorCliente(idCliente); // Buscar en BD
     }
     
     /**
@@ -251,9 +284,7 @@ public class TurnoService {
      * @return Lista de turnos en esa fecha
      */
     public List<Turno> buscarTurnosPorFecha(LocalDate fecha) {
-        return turnos.stream()
-                .filter(turno -> turno.getFecha().equals(fecha))
-                .collect(Collectors.toList());
+        return turnoDAO.buscarPorFecha(fecha); // Buscar en BD
     }
     
     /**
@@ -262,9 +293,7 @@ public class TurnoService {
      * @return Lista de turnos con ese estado
      */
     public List<Turno> buscarTurnosPorEstado(String estado) {
-        return turnos.stream()
-                .filter(turno -> turno.getEstado().equals(estado))
-                .collect(Collectors.toList());
+        return turnoDAO.buscarPorEstado(estado); // Buscar en BD
     }
     
     /**
@@ -272,6 +301,9 @@ public class TurnoService {
      * @return String con estadísticas
      */
     public String obtenerEstadisticas() {
+        // Leer todos los turnos desde BD para calcular estadísticas - READ (CRUD)
+        List<Turno> turnos = turnoDAO.leerTodos();
+        
         int totalTurnos = turnos.size();
         int turnosPendientes = (int) turnos.stream().filter(t -> "Pendiente".equals(t.getEstado())).count();
         int turnosConfirmados = (int) turnos.stream().filter(t -> "Confirmado".equals(t.getEstado())).count();
@@ -296,14 +328,22 @@ public class TurnoService {
     public int limpiarTurnosAntiguos(int diasAntiguedad) {
         LocalDate fechaLimite = LocalDate.now().minusDays(diasAntiguedad);
         
-        List<Turno> turnosAEliminar = turnos.stream()
-                .filter(turno -> "Cancelado".equals(turno.getEstado()) && 
-                                turno.getFecha().isBefore(fechaLimite))
+        // Leer turnos cancelados desde BD - READ (CRUD)
+        List<Turno> turnosCancelados = turnoDAO.buscarPorEstado("Cancelado");
+        
+        List<Turno> turnosAEliminar = turnosCancelados.stream()
+                .filter(turno -> turno.getFecha().isBefore(fechaLimite))
                 .collect(Collectors.toList());
         
-        turnos.removeAll(turnosAEliminar);
+        // Eliminar de la base de datos - DELETE (CRUD)
+        int eliminados = 0;
+        for (Turno turno : turnosAEliminar) {
+            if (turnoDAO.eliminar(turno.getIdTurno())) {
+                eliminados++;
+            }
+        }
         
-        System.out.println("Se eliminaron " + turnosAEliminar.size() + " turnos cancelados antiguos");
-        return turnosAEliminar.size();
+        System.out.println("Se eliminaron " + eliminados + " turnos cancelados antiguos");
+        return eliminados;
     }
 }

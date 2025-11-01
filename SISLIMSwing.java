@@ -1,14 +1,13 @@
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import sislim.model.*;
 import sislim.service.*;
+import sislim.dao.*;
 
 /**
  * Aplicación principal de Swing para SISLIM
@@ -38,6 +37,13 @@ public class SISLIMSwing extends JFrame {
     private JTextField fechaField;
     private JTextField observacionesField;
     
+    // Labels del panel de información para actualizar después de cargar datos - ENCAPSULAMIENTO
+    private JLabel infoClientesLabel;
+    private JLabel infoAdminsLabel;
+    private JLabel infoDisponibilidadesLabel;
+    private JPanel infoPanel; // Panel de información completo para refrescar
+    private JPanel listaClientesPanel; // Panel contenedor para la lista de clientes
+    
     /**
      * Constructor principal - ENCAPSULAMIENTO
      */
@@ -49,11 +55,16 @@ public class SISLIMSwing extends JFrame {
         setLocationRelativeTo(null);
         setResizable(true);
         
-        // Inicializar servicios y datos
-        inicializarSistema();
+        // Inicializar listas vacías PRIMERO (para evitar NullPointerException)
+        this.clientes = new java.util.ArrayList<>();
+        this.administradores = new java.util.ArrayList<>();
+        this.disponibilidades = new java.util.ArrayList<>();
         
         // Crear la interfaz
         crearInterfaz();
+        
+        // Inicializar servicios y datos DESPUÉS de crear la interfaz
+        inicializarSistema();
         
         // Mostrar mensaje de bienvenida
         mostrarMensaje("=== BIENVENIDO AL SISTEMA SISLIM ===\n" +
@@ -63,50 +74,70 @@ public class SISLIMSwing extends JFrame {
     
     /**
      * Método para inicializar el sistema - ENCAPSULAMIENTO
+     * En el TP4, carga datos desde MySQL usando DAOs (Data Access Objects)
+     * Todo debe venir de la base de datos, no se crean datos de prueba automáticamente
      */
     private void inicializarSistema() {
         this.turnoService = new TurnoService();
         this.notificacionService = new NotificacionService();
-        this.clientes = new java.util.ArrayList<>();
-        this.administradores = new java.util.ArrayList<>();
-        this.disponibilidades = new java.util.ArrayList<>();
         
-        // Crear datos de prueba
-        crearDatosPrueba();
+        // Verificar conexión a la base de datos
+        ConexionBD conexionBD = ConexionBD.getInstancia();
+        if (!conexionBD.probarConexion()) {
+            mostrarMensaje("⚠️ ADVERTENCIA: No se pudo conectar a la base de datos MySQL.\n" +
+                          "Asegúrese de que MySQL esté ejecutándose y la base de datos 'sislim' exista.\n" +
+                          "El sistema no funcionará correctamente sin conexión a la base de datos.\n");
+            
+            // Las listas ya están inicializadas vacías en el constructor
+            return;
+        }
+        
+        // Cargar datos desde la base de datos usando DAOs - READ (CRUD)
+        cargarDatosDesdeBD();
+        
+        // Si no hay datos, simplemente informar (los datos se insertan manualmente o con scripts SQL)
+        if (clientes.isEmpty() && administradores.isEmpty()) {
+            mostrarMensaje("ℹ️ La base de datos está vacía.\n" +
+                          "Puede insertar datos manualmente usando las funcionalidades del sistema\n" +
+                          "o ejecutando el script SQL de inserción de datos.\n");
+        }
     }
     
     /**
-     * Método para crear datos de prueba - ENCAPSULAMIENTO
+     * Método para cargar datos desde la base de datos - READ (CRUD)
+     * En el TP4, utiliza DAOs para leer datos de MySQL
      */
-    private void crearDatosPrueba() {
-        // Crear clientes de prueba
-        Cliente cliente1 = new Cliente(1, "Juan Pérez", "juanperez@email.com", "111-222-333", "Av. Siempre Viva 123");
-        Cliente cliente2 = new Cliente(2, "María Gómez", "maria.gomez@email.com", "444-555-666", "Calle Falsa 456");
-        Cliente cliente3 = new Cliente(3, "Carlos López", "carlos.lopez@email.com", "777-888-999", "Av. Principal 789");
-        clientes.add(cliente1);
-        clientes.add(cliente2);
-        clientes.add(cliente3);
-        
-        // Crear administradores de prueba
-        Administrador admin1 = new Administrador(1, "Admin1", "admin1@sislim.com", "999-888-777");
-        Administrador admin2 = new Administrador(2, "Admin2", "admin2@sislim.com", "888-777-666");
-        administradores.add(admin1);
-        administradores.add(admin2);
-        
-        // Crear disponibilidades de prueba
-        Disponibilidad disp1 = new Disponibilidad(1, LocalDate.now().plusDays(1), 
-                                                 LocalTime.of(9, 0), LocalTime.of(11, 0), 
-                                                 "Zona Norte", "Limpieza básica");
-        Disponibilidad disp2 = new Disponibilidad(2, LocalDate.now().plusDays(2), 
-                                                 LocalTime.of(15, 0), LocalTime.of(17, 0), 
-                                                 "Zona Sur", "Limpieza profunda");
-        Disponibilidad disp3 = new Disponibilidad(3, LocalDate.now().plusDays(3), 
-                                                 LocalTime.of(10, 0), LocalTime.of(12, 0), 
-                                                 "Zona Centro", "Limpieza básica");
-        disponibilidades.add(disp1);
-        disponibilidades.add(disp2);
-        disponibilidades.add(disp3);
+    private void cargarDatosDesdeBD() {
+        try {
+            ClienteDAO clienteDAO = new ClienteDAO();
+            AdministradorDAO adminDAO = new AdministradorDAO();
+            DisponibilidadDAO dispDAO = new DisponibilidadDAO();
+            
+            // Cargar desde BD - READ (CRUD)
+            this.clientes = clienteDAO.leerTodos();
+            this.administradores = adminDAO.leerTodos();
+            this.disponibilidades = dispDAO.leerTodas();
+            
+            mostrarMensaje("✅ Datos cargados desde la base de datos:\n" +
+                          "- Clientes: " + clientes.size() + "\n" +
+                          "- Administradores: " + administradores.size() + "\n" +
+                          "- Disponibilidades: " + disponibilidades.size() + "\n");
+            
+            // Actualizar los labels del panel de información después de cargar datos
+            actualizarPanelInformacion();
+            
+        } catch (Exception e) {
+            System.err.println("Error al cargar datos desde BD: " + e.getMessage());
+            e.printStackTrace();
+            
+            // Las listas ya están inicializadas vacías en el constructor
+            // Limpiar listas por si acaso hubo un error parcial
+            this.clientes.clear();
+            this.administradores.clear();
+            this.disponibilidades.clear();
+        }
     }
+    
     
     /**
      * Método para crear la interfaz principal - ENCAPSULAMIENTO
@@ -250,6 +281,7 @@ public class SISLIMSwing extends JFrame {
      */
     private JPanel crearPanelInformacion() {
         JPanel panel = new JPanel();
+        this.infoPanel = panel; // Guardar referencia para actualizar
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBorder(new EmptyBorder(20, 20, 20, 10));
         panel.setBackground(new Color(236, 240, 241));
@@ -262,45 +294,89 @@ public class SISLIMSwing extends JFrame {
         panel.add(Box.createVerticalStrut(20));
         
         // Información de clientes
-        JLabel infoClientes = new JLabel("Clientes registrados: " + clientes.size());
-        infoClientes.setFont(new Font("Arial", Font.PLAIN, 12));
-        infoClientes.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(infoClientes);
+        infoClientesLabel = new JLabel("Clientes registrados: " + clientes.size());
+        infoClientesLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        infoClientesLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        panel.add(infoClientesLabel);
         panel.add(Box.createVerticalStrut(10));
         
         // Información de administradores
-        JLabel infoAdmins = new JLabel("Administradores: " + administradores.size());
-        infoAdmins.setFont(new Font("Arial", Font.PLAIN, 12));
-        infoAdmins.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(infoAdmins);
+        infoAdminsLabel = new JLabel("Administradores: " + administradores.size());
+        infoAdminsLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        infoAdminsLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        panel.add(infoAdminsLabel);
         panel.add(Box.createVerticalStrut(10));
         
         // Información de disponibilidades
-        JLabel infoDisponibilidades = new JLabel("Disponibilidades: " + disponibilidades.size());
-        infoDisponibilidades.setFont(new Font("Arial", Font.PLAIN, 12));
-        infoDisponibilidades.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(infoDisponibilidades);
+        infoDisponibilidadesLabel = new JLabel("Disponibilidades: " + disponibilidades.size());
+        infoDisponibilidadesLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        infoDisponibilidadesLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        panel.add(infoDisponibilidadesLabel);
         panel.add(Box.createVerticalStrut(20));
         
         // Separador
         panel.add(new JSeparator());
         panel.add(Box.createVerticalStrut(20));
         
-        // Lista de clientes
+        // Lista de clientes - Panel contenedor que se actualizará dinámicamente
         JLabel tituloClientes = new JLabel("Clientes:");
         tituloClientes.setFont(new Font("Arial", Font.BOLD, 12));
         tituloClientes.setAlignmentX(Component.CENTER_ALIGNMENT);
         panel.add(tituloClientes);
         panel.add(Box.createVerticalStrut(10));
         
+        listaClientesPanel = new JPanel();
+        listaClientesPanel.setLayout(new BoxLayout(listaClientesPanel, BoxLayout.Y_AXIS));
+        listaClientesPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        listaClientesPanel.setBackground(new Color(236, 240, 241));
+        actualizarListaClientes();
+        panel.add(listaClientesPanel);
+        
+        return panel;
+    }
+    
+    /**
+     * Método para actualizar la lista de clientes en el panel - ENCAPSULAMIENTO
+     */
+    private void actualizarListaClientes() {
+        if (listaClientesPanel == null) {
+            return;
+        }
+        
+        // Limpiar el panel de clientes
+        listaClientesPanel.removeAll();
+        
+        // Agregar clientes actualizados
         for (Cliente cliente : clientes) {
             JLabel clienteInfo = new JLabel("• " + cliente.getNombre());
             clienteInfo.setFont(new Font("Arial", Font.PLAIN, 10));
             clienteInfo.setAlignmentX(Component.CENTER_ALIGNMENT);
-            panel.add(clienteInfo);
+            listaClientesPanel.add(clienteInfo);
+        }
+    }
+    
+    /**
+     * Método para actualizar el panel de información después de cargar datos - ENCAPSULAMIENTO
+     */
+    private void actualizarPanelInformacion() {
+        if (infoClientesLabel != null) {
+            infoClientesLabel.setText("Clientes registrados: " + clientes.size());
+        }
+        if (infoAdminsLabel != null) {
+            infoAdminsLabel.setText("Administradores: " + administradores.size());
+        }
+        if (infoDisponibilidadesLabel != null) {
+            infoDisponibilidadesLabel.setText("Disponibilidades: " + disponibilidades.size());
         }
         
-        return panel;
+        // Actualizar la lista de clientes en el panel
+        actualizarListaClientes();
+        
+        // Refrescar el panel para mostrar los nuevos valores
+        if (infoPanel != null) {
+            infoPanel.revalidate();
+            infoPanel.repaint();
+        }
     }
     
     /**
